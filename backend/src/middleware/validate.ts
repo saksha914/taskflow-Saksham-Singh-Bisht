@@ -1,0 +1,23 @@
+import { Request, Response, NextFunction } from 'express';
+import { ZodSchema, ZodError } from 'zod';
+import { ValidationError } from '../utils/errors';
+
+export function validate(schema: ZodSchema) {
+  return (req: Request, _res: Response, next: NextFunction) => {
+    try {
+      req.body = schema.parse(req.body);
+      next();
+    } catch (err) {
+      if (err instanceof ZodError) {
+        const fields: Record<string, string> = {};
+        err.errors.forEach((e) => {
+          const key = e.path.join('.');
+          fields[key] = e.message;
+        });
+        next(new ValidationError(fields));
+      } else {
+        next(err);
+      }
+    }
+  };
+}
