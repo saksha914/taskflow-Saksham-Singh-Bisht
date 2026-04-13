@@ -136,19 +136,19 @@ cd backend && npm test
 - **BullMQ job queue** — Move slow work (email notifications, webhook delivery, activity log fan-out) off the request thread into Redis-backed queues with retry, backoff, and dead-letter handling
 
 ### Data Model & API
-- **Fractional indexing for task ordering** — Add a `position float8` column on `tasks`; use the midpoint algorithm to reorder without updating every row. Enables intra-column drag-and-drop and cross-column positional placement
-- **Task dependencies** — Add a `task_links(source_id, target_id, type)` table with types `blocks | duplicates | relates_to`; surface blocked tasks visually on the board and prevent closing a task while its blockers are open
-- **Sub-tasks** — Self-referencing `parent_task_id` FK on `tasks`; aggregate sub-task completion into a progress bar on the parent card
-- **Custom fields** — `project_fields(id, project_id, name, type)` + `task_field_values(task_id, field_id, value)` JSONB column; lets teams add Priority dropdowns, Story Points numbers, or Sprint date-range fields without schema changes
-- **Cursor-based pagination** — Replace `OFFSET/LIMIT` with `WHERE id > $cursor ORDER BY id LIMIT n`; `OFFSET` scans and discards rows, which degrades linearly on large tables
-- **Row-level locking on concurrent updates** — Wrap task PATCH in `BEGIN; SELECT ... FOR UPDATE; UPDATE; COMMIT` to prevent last-write-wins corruption when two users edit the same task simultaneously
-- **Full-text search** — Add a `tsvector` generated column on `tasks(title, description)` with a GIN index; expose `GET /search?q=` using `to_tsquery` — no Elasticsearch needed for this scale
+- **Paginate `getById` relationships** — Currently, `GET /projects/:id` joins and returns *all* tasks in a single query. At scale (e.g. 50,000 tasks), this will block the Node.js event loop, cause an Out-Of-Memory (OOM) crash, and freeze the browser. Related tasks MUST be paginated on a separate endpoint (`GET /projects/:id/tasks?page=...`).
+- **Fix `COALESCE` Update Flaw** — The `UPDATE projects SET description = COALESCE($2, description)` query prevents users from ever clearing out a description once it is set (passing `null` falls back to the old value). The SQL string should be built dynamically based on the provided keys in the DTO.
+- **UUIDv7 over UUIDv4** — The `init.up.sql` migration uses `gen_random_uuid()` (v4) for primary keys. v4 UUIDs are entirely random, which causes severe B-Tree index fragmentation and degrades `INSERT` performance under high write loads. A sequential ID like UUIDv7 or ULID should be used instead.
+- **Cursor-based pagination** — Replace `OFFSET/LIMIT` with `WHERE id > $cursor ORDER BY id LIMIT n`. `OFFSET` scans and discards rows on disk, degrading query performance linearly on massive tables.
+- **Fractional indexing for task ordering** — Add a `position float8` column on `tasks`; use the midpoint algorithm to reorder without updating every row. Enables intra-column drag-and-drop and cross-column positional placement.
+- **Row-level locking on concurrent updates** — Wrap task PATCH in `BEGIN; SELECT ... FOR UPDATE; UPDATE; COMMIT` to prevent last-write-wins corruption when two users edit the same task simultaneously.
+- **Full-text search** — Add a `tsvector` generated column on `tasks` with a GIN index; expose `GET /search?q=` using `to_tsquery` — no Elasticsearch needed for this scale.
 
 ### Frontend
-- **Optimistic UI updates** — Apply drag-and-drop and field edits to local state immediately, fire the PATCH in the background, and roll back with an error toast on failure; eliminates the visible latency on every board interaction
-- **Virtual scrolling** — Use `@tanstack/react-virtual` for the list view; rendering 500+ task rows into the DOM today causes jank on low-end devices
-- **Keyboard shortcuts** — `N` to create task, `E` to edit focused card, `Esc` to close modals — standard in every productivity tool and completely absent right now
-- **Bulk actions** — Checkbox-select multiple tasks → assign, move status, or delete in one request; critical for sprint planning workflows
+- **Project-scoped Assignee Fetching** — Currently, the frontend calls `userApi.list()` on load, fetching the *entire* world's user base into the browser just to populate assignee names. This crashes if the user base grows. Assignees should be fetched via a SQL `JOIN` on the backend, strictly scoped to the active project.
+- **Virtual scrolling for Kanban/List views** — Use `@tanstack/react-virtual` for the list view and board. Rendering thousands of task rows into the DOM causes jank and freezes on low-end devices.
+- **Optimistic UI updates** — Apply drag-and-drop edits to local state immediately, fire the PATCH in the background, and roll back with an error toast on failure; eliminates visible latency on board interaction.
+- **Keyboard shortcuts & Bulk Actions** — Standardize productivity with `N` to create, `Esc` to close, and checkbox-select multiple tasks for bulk assigning/moving.
 
 ### Testing & Observability
 - **Service-layer unit tests** — Current tests only hit HTTP endpoints. Extract business logic into service classes and unit-test them with a fake repository so tests run without a database
